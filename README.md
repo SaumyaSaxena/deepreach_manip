@@ -44,6 +44,18 @@ To start training DeepReach for air3D, you can run:
 ```
 CUDA_VISIBLE_DEVICES=0 python experiment_scripts/train_hji_air3D.py --experiment_name experiment_1 --minWith target --tMax 1.1 --velocity 0.75 --omega_max 3.0 --angle_alpha 1.2 --num_src_samples 10000 --pretrain --pretrain_iters 10000 --num_epochs 120000 --counter_end 110000
 ```
+
+Run ParameterizedVertDrone2D:
+```
+CUDA_VISIBLE_DEVICES=2 python run_experiment.py --mode train --experiment_name ParameterizedVertDrone2D_1e5_epochs --wandb_group training --wandb_name ParameterizedVertDrone2D_1e5_epochs --dynamics_class ParameterizedVertDrone2D --minWith target --gravity 9.8 --input_multiplier_max 12 --input_magnitude_max 1 --tMax 2 --num_epochs 100000
+```
+
+Run Air3D:
+```
+CUDA_VISIBLE_DEVICES=2 python run_experiment.py --mode train --experiment_name air3D --wandb_group training --wandb_name air3D --dynamics_class Air3D --minWith target --tMax 1.1 --velocity 0.75 --omega_max 3.0 --angle_alpha 1.2 --num_src_samples 10000 --pretrain --pretrain_iters 10000 --num_epochs 120000 --counter_end 110000 --collisionR 0.25
+```
+
+
 This will regularly save checkpoints in the directory specified by the rootpath in the script, in a subdirectory "experiment_1". 
 
 We also provide pre-trained checkpoints that can be used to visualize the results in the paper. The checkpoints can be downloaded from 
