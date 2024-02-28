@@ -1,8 +1,14 @@
 from abc import ABC, abstractmethod
 from utils import diff_operators
 
+import os
 import math
 import torch
+import wandb
+
+from GNN_planning_with_contact.learning import *
+from GNN_planning_with_contact.datasets import *
+from GNN_planning_with_contact.datasets.data_utils import batch_from_data_array
 
 # during training, states will be sampled uniformly by each state dimension from the model-unit -1 to 1 range (for training stability),
 # which may or may not correspond to proper test ranges
@@ -686,7 +692,12 @@ class ReachAvoidRocketLanding(Dynamics):
         dist_top = state[..., 1] - wall_top
         dist_wall_x = torch.max(dist_left, dist_right)
         dist_wall_y = torch.max(dist_bottom, dist_top)
-        dist_wall = torch.norm(torch.cat((torch.max(torch.tensor(0), dist_wall_x).unsqueeze(-1), torch.max(torch.tensor(0), dist_wall_y).unsqueeze(-1)), dim=-1), dim=-1) + torch.min(torch.tensor(0), torch.max(dist_wall_x, dist_wall_y))
+        dist_wall = torch.norm(
+            torch.cat((torch.max(torch.tensor(0), dist_wall_x).unsqueeze(-1), 
+                       torch.max(torch.tensor(0), dist_wall_y).unsqueeze(-1)), dim=-1), 
+                       dim=-1
+                       ) + torch.min(torch.tensor(0), 
+                                     torch.max(dist_wall_x, dist_wall_y))
 
         return torch.min(dist_y, dist_wall)
 
@@ -1161,4 +1172,173 @@ class MultiVehicleCollision(Dynamics):
             'x_axis_idx': 0,
             'y_axis_idx': 1,
             'z_axis_idx': 6,
+        }
+
+class PickUpObjectLearnedSwitchingModel(Dynamics):
+    def __init__(self):
+        # input_dim = state_dim + 1 because input = (t, state)
+        super().__init__(
+            loss_type='brat_hjivi', set_mode='reach',
+            state_dim=8, input_dim=9, control_dim=2, disturbance_dim=0,
+            state_mean=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            state_var=[10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+            value_mean=0.0,
+            value_var=1.0,
+            value_normto=0.02,
+            diff_model=True,
+        )
+        # load learned model
+        self.model_path = '/home/saumyas/Projects/GNN_planning_with_contact/outputs/2024-02-23/14-07-06/'
+        self.wandb_path = 'iam-lab/GNN_planning_with_contact/to4lnvhx'
+        self.umax = 100
+        
+        self.dt = 0.05 # TODO: read this from model/dataset
+        self.goal = torch.tensor([1.0, 1.0])
+
+        self.load_model()
+
+    def load_model(self):
+        checkpoint = torch.load(self.model_path + 'OneObjPickup_withModes/checkpoints/last.ckpt', map_location="cuda")
+        
+        api = wandb.Api()
+        run = api.run(self.wandb_path)
+        cfg_dict = run.config
+        
+        model_name = cfg_dict['model_name']
+        dataset_name = cfg_dict['dataset_name']
+
+        dataset = eval(dataset_name)()
+
+        cfg_dict['gpu'] = 0
+        self.dyn_model = eval(model_name)(
+            train_ds_gen=lambda : dataset, 
+            val_ds_gen=lambda : dataset,
+            cfg_dict=cfg_dict
+            )
+        self.dyn_model.load_state_dict(checkpoint['state_dict'])
+        self.dyn_model.eval()
+
+    def state_test_range(self):
+        # TODO: read these ranges from a config file
+        # TODO: size of state space can come from the learned model
+        
+        ## Stacked state of gripper and object [x, y, xdot, ydot]
+        return [
+            [-2., 2.],
+            [-2., 2.],
+            [-5., 5.],
+            [-5., 5.],
+            [-2., 2.],
+            [-2., 2.],
+            [-5., 5.],
+            [-5., 5.],
+        ]
+
+    def equivalent_wrapped_state(self, state):
+        wrapped_state = torch.clone(state)
+        return wrapped_state 
+
+    def dsdt(self, state, control, disturbance): # not used if use_CSL=False, TODO: what does use_CSL do? 
+        batch_size = state.shape[0]
+        import ipdb; ipdb.set_trace()
+        dataz0, *_ = self.model.process_input_and_final_state(state, state)
+        dataz0.control = control.repeat(1, self.model._N_O).T
+        xkp1, A_k, B_k, o_k, _ = self.model._predict_next_state_via_linear_model(dataz0, ht=None, T=1)
+
+        dsdt = torch.zeros_like(state)
+        return dsdt
+
+    def reach_fn(self, state):
+        # Only target set in the xy direction
+        dist_x_g = torch.norm(state[..., 0:2] - self.goal.to(state.device), dim=-1) - 0.1 # Distance gripper to goal is less than 0.1
+        # dist_x_o = torch.norm(state[..., 4:6] - self.goal.to(state.device), dim=-1) - 0.1 # Distance object to goal is less than 0.1
+        
+        # max_dist_goal = torch.max(dist_x_g, dist_x_o)
+
+        # dist_g_o = torch.norm(state[..., 0:2] - state[..., 4:6], dim=-1) - 0.1
+        # max_dist = torch.max(max_dist_goal, dist_g_o)
+
+        return dist_x_g
+
+    def avoid_fn(self, state):
+        # distance to floor
+        rel_velocity = torch.abs(
+            torch.sqrt(state[..., 2]**2 + state[..., 3]**2)  - torch.sqrt(state[..., 6]**2 + state[..., 7]**2)
+            ) - 0.2
+
+        return rel_velocity*0.0
+
+    def boundary_fn(self, state):
+        return torch.maximum(self.reach_fn(state), -self.avoid_fn(state))
+
+    def sample_target_state(self, num_samples): # TODO
+        target_state_range = self.state_test_range()
+        target_state_range[0] = [-20, 20] # y in [-20, 20]
+        target_state_range[1] = [10, 20]  # z in [10, 20]
+        target_state_range = torch.tensor(target_state_range)
+        return target_state_range[:, 0] + torch.rand(num_samples, self.state_dim)*(target_state_range[:, 1] - target_state_range[:, 0])
+
+    def cost_fn(self, state_traj):
+        # return min_t max{l(x(t)), max_k_up_to_t{-g(x(k))}}, where l(x) is reach_fn, g(x) is avoid_fn 
+        reach_values = self.reach_fn(state_traj)
+        avoid_values = self.avoid_fn(state_traj)
+        return torch.min(torch.maximum(reach_values, torch.cummax(-avoid_values, dim=-1).values), dim=-1).values
+
+    def hamiltonian(self, state, dvds):
+        # Minimizing hamiltonian
+        # state.shape = [batch_size,numpoints,state_dim], dvds.shape = [batch_size,numpoints,state_dim]
+        
+        flattened_state = state.reshape(-1, self.state_dim)
+        graph_batch = batch_from_data_array(self.dyn_model.ds, flattened_state).to(state.device)
+        _, A_k, B_k, o_k, _ = self.dyn_model._predict_next_state_via_linear_model(graph_batch, ht=None, T=1)
+        flattened_dvds = dvds.reshape(-1, self.state_dim)
+        
+        n = graph_batch.pos.shape[1]
+        const_coeff = (torch.matmul(A_k, graph_batch.pos[:,:,None])).view(-1,n) + o_k
+        const_coeff = const_coeff[:,:4].reshape(-1,self.state_dim) # TODO: remove hardcoded '4'
+
+        ham_constant = torch.matmul(
+            flattened_dvds[:, None, :], const_coeff[:,:,None]
+            ).flatten().reshape(state.shape[0], state.shape[1])
+        
+        ctrl_coeff = torch.matmul(
+            (flattened_dvds.reshape(-1, 4))[:, None, :],
+            B_k[:,:4,:]
+            ).squeeze().reshape(-1, self.control_dim*2).reshape(state.shape[0], state.shape[1], -1)
+        
+        ham_ctrl = -self.umax * torch.norm(ctrl_coeff, dim=2)
+        
+        # Compute the Hamiltonian
+        ham_vehicle = ham_ctrl + ham_constant
+
+        return ham_vehicle
+
+    def optimal_control(self, state, dvds):
+        flattened_state = state.reshape(-1, self.state_dim)
+        graph_batch = batch_from_data_array(self.dyn_model.ds, flattened_state).to(state.device)
+        _, A_k, B_k, o_k, _ = self.dyn_model._predict_next_state_via_linear_model(graph_batch, ht=None, T=1)
+        flattened_dvds = dvds.reshape(-1, self.state_dim)
+
+        ctrl_coeff = torch.matmul(
+            (flattened_dvds.reshape(-1, 4))[:, None, :],
+            B_k[:,:4,:]
+            ).squeeze().reshape(-1, self.control_dim*2).reshape(state.shape[0], state.shape[1], -1)
+
+        _y = ctrl_coeff[:,:,1] + ctrl_coeff[:,:,3]
+        _x = ctrl_coeff[:,:,0] + ctrl_coeff[:,:,2]
+        
+        opt_angle = torch.atan2(_y, _x) + math.pi
+    
+        return torch.cat((self.umax * torch.cos(opt_angle)[..., None], self.umax * torch.sin(opt_angle)[..., None]), dim=-1)
+
+    def optimal_disturbance(self, state, dvds):
+        return 0
+
+    def plot_config(self):
+        return {
+            'state_slices': [0, 0, 0, 0, 0, 0, 0.0, 0],
+            'state_labels': ['xg', 'yg', r'$v_xg$', r'$v_yg$', 'xo', 'yo', r'$v_xo$', r'$v_yo$',],
+            'x_axis_idx': 0,
+            'y_axis_idx': 1,
+            'z_axis_idx': 2,
         }

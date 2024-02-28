@@ -19,7 +19,6 @@ p.add_argument('--mode', type=str, required=True, choices=['all', 'train', 'test
 
 # save/load directory options
 p.add_argument('--experiments_dir', type=str, default='./runs', help='Where to save the experiment subdirectory.')
-p.add_argument('--experiment_name', type=str, required=True, help='Name of the experient subdirectory.')
 p.add_argument('--wandb_project', type=str, default='deepreach', required=False, help='wandb project')
 p.add_argument('--wandb_group', type=str, default='./runs', required=True, help='wandb group')
 p.add_argument('--wandb_name', type=str, default='./runs', required=True, help='name of wandb run')
@@ -58,6 +57,7 @@ if (mode == 'all') or (mode == 'train'):
     # training options
     p.add_argument('--epochs_til_ckpt', type=int, default=1000, help='Time interval in seconds until checkpoint is saved.')
     p.add_argument('--steps_til_summary', type=int, default=100, help='Time interval in seconds until tensorboard summary is saved.')
+    p.add_argument('--save_top_k', type=int, default=5, help='Number of top checkpoints to save.')
     p.add_argument('--batch_size', type=int, default=1, help='Batch size used during training (irrelevant, since len(dataset) == 1).')
     p.add_argument('--lr', type=float, default=2e-5, help='learning rate. default=2e-5')
     p.add_argument('--num_epochs', type=int, default=100000, help='Number of epochs to train for.')
@@ -92,6 +92,7 @@ if (mode == 'all') or (mode == 'train'):
     # load special dynamics_class arguments dynamically from chosen dynamics class
     dynamics_class = dynamics_classes_dict[p.parse_known_args()[0].dynamics_class]
     dynamics_params = {name: param for name, param in inspect.signature(dynamics_class).parameters.items() if name != 'self'}
+    
     for param in dynamics_params.keys():
         if dynamics_params[param].annotation is bool:
             p.add_argument('--' + param, type=dynamics_params[param].annotation, default=False, help='special dynamics_class argument')
@@ -100,7 +101,7 @@ if (mode == 'all') or (mode == 'train'):
 
 if (mode == 'all') or (mode == 'test'):
     p.add_argument('--dt', type=float, default=0.0025, help='The dt used in testing simulations')
-    p.add_argument('--checkpoint_toload', type=int, default=None, help="The checkpoint to load for testing (-1 for final training checkpoint, None for cross-checkpoint testing")
+    p.add_argument('--checkpoint_toload', type=str, default=None, help="The checkpoint to load for testing (-1 for final training checkpoint, None for cross-checkpoint testing")
     p.add_argument('--num_scenarios', type=int, default=100000, help='The number of scenarios sampled in scenario optimization for testing')
     p.add_argument('--num_violations', type=int, default=1000, help='The number of violations to sample for in scenario optimization for testing')
     p.add_argument('--control_type', type=str, default='value', choices=['value', 'ttr', 'init_ttr'], help='The controller to use in scenario optimization for testing')
@@ -108,16 +109,11 @@ if (mode == 'all') or (mode == 'test'):
 
 opt = p.parse_args()
 
-# start wandb
-wandb.init(
-    project = opt.wandb_project,
-    entity = "iam-lab",
-    group = opt.wandb_group,
-    name = opt.wandb_name,
-)
-wandb.config.update(opt)
+current_time = datetime.now()
+tag = current_time.strftime('%m_%d_%Y_%H_%M_%S')
+wandb_name = opt.wandb_name + '_' + tag
+experiment_dir = os.path.join(opt.experiments_dir, opt.wandb_group, wandb_name)
 
-experiment_dir = os.path.join(opt.experiments_dir, opt.experiment_name)
 if (mode == 'all') or (mode == 'train'):
     # create experiment dir
     if os.path.exists(experiment_dir):
@@ -132,9 +128,18 @@ elif mode == 'test':
     if not os.path.exists(experiment_dir):
         raise RuntimeError('Cannot run test mode: experiment directory not found!')
 
-current_time = datetime.now()
+# start wandb
+wandb.init(
+    project = opt.wandb_project,
+    entity = "iam-lab",
+    group = opt.wandb_group,
+    name = wandb_name,
+    dir = experiment_dir
+)
+wandb.config.update(opt)
+
 # log current config
-with open(os.path.join(experiment_dir, 'config_%s.txt' % current_time.strftime('%m_%d_%Y_%H_%M')), 'w') as f:
+with open(os.path.join(experiment_dir, 'config_%s.txt' % tag), 'w') as f:
     for arg, val in vars(opt).items():
         f.write(arg + ' = ' + str(val) + '\n')
 
@@ -182,7 +187,7 @@ if (mode == 'all') or (mode == 'train'):
     else:
         raise NotImplementedError
     experiment.train(
-        batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, 
+        batch_size=orig_opt.batch_size, epochs=orig_opt.num_epochs, lr=orig_opt.lr, save_top_k=orig_opt.save_top_k,
         steps_til_summary=orig_opt.steps_til_summary, epochs_til_checkpoint=orig_opt.epochs_til_ckpt, 
         loss_fn=loss_fn, clip_grad=orig_opt.clip_grad, use_lbfgs=orig_opt.use_lbfgs, adjust_relative_grads=orig_opt.adj_rel_grads,
         val_x_resolution=orig_opt.val_x_resolution, val_y_resolution=orig_opt.val_y_resolution, val_z_resolution=orig_opt.val_z_resolution, val_time_resolution=orig_opt.val_time_resolution,

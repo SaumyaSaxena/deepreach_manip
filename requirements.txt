@@ -7,15 +7,15 @@ imageio-ffmpeg==0.4.2
 imbalanced-learn==0.6.2
 keras-applications==1.0.8
 keras-preprocessing==1.1.2
-matplotlib
+# matplotlib
 moviepy==1.0.3
 opencv-python==3.4.9.33
 opt-einsum==3.2.1
 proglog==0.1.9
 pytz==2020.1
-tensorboard
-tensorflow
-tensorflow-estimator
+# tensorboard
+# tensorflow
+# tensorflow-estimator
 termcolor==1.1.0
 typing-extensions==4.1.1
 wrapt==1.12.1
@@ -23,4 +23,4 @@ youtube-dl==2020.6.6
 configargparse
 pandas
 plotly
-wandb==0.15.11
+# wandb==0.15.11

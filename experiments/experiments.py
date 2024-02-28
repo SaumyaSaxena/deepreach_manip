@@ -20,6 +20,7 @@ from datetime import datetime
 from sklearn import svm 
 from utils import diff_operators
 from utils.error_evaluators import scenario_optimization, ValueThresholdValidator, MultiValidator, MLPConditionedValidator, target_fraction, MLP, MLPValidator, SliceSampleGenerator
+from utils.logger import TopKLogger
 
 class Experiment(ABC):
     def __init__(self, model, dataset, experiment_dir):
@@ -87,7 +88,7 @@ class Experiment(ABC):
             self.model.requires_grad_(True)
     
     def train(
-            self, batch_size, epochs, lr, 
+            self, batch_size, epochs, lr, save_top_k,
             steps_til_summary, epochs_til_checkpoint, 
             loss_fn, clip_grad, use_lbfgs, adjust_relative_grads, 
             val_x_resolution, val_y_resolution, val_z_resolution, val_time_resolution,
@@ -100,6 +101,8 @@ class Experiment(ABC):
         train_dataloader = DataLoader(self.dataset, shuffle=True, batch_size=batch_size, pin_memory=True, num_workers=0)
 
         optim = torch.optim.Adam(lr=lr, params=self.model.parameters())
+
+        topk_logger = TopKLogger(save_top_k)
 
         # copy settings from Raissi et al. (2019) and here 
         # https://github.com/maziarraissi/PINNs
@@ -447,8 +450,20 @@ class Experiment(ABC):
                         'epoch': epoch+1,
                         'model': self.model.state_dict(),
                         'optimizer': optim.state_dict()}
-                    torch.save(checkpoint,
-                        os.path.join(checkpoints_dir, 'model_epoch_%04d.pth' % (epoch+1)))
+                    # torch.save(checkpoint,
+                    #     os.path.join(checkpoints_dir, 'model_epoch_%04d.pth' % (epoch+1)))
+                    mean_loss = np.mean(np.array(train_losses))
+                    save_file_name = (f'./epoch_{epoch}_step_{step}_'
+                            f'loss_{mean_loss:.3f}.pth')
+                        
+                    status = topk_logger.push(save_file_name, -1*mean_loss)
+                    if status:
+                        torch.save(self.model.state_dict(),
+                            os.path.join(checkpoints_dir, save_file_name))
+                        # wandb.save(save_file_name, base_path=os.path.join(os.getcwd(),checkpoints_dir))
+                        wandb.save(os.path.join(checkpoints_dir, save_file_name), base_path=training_dir)
+                        print(f'Did save checkpoint: {os.path.join(os.getcwd(), checkpoints_dir, save_file_name)}')
+
                     np.savetxt(os.path.join(checkpoints_dir, 'train_losses_epoch_%04d.txt' % (epoch+1)),
                         np.array(train_losses))
                     self.validate(

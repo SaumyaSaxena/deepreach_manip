@@ -55,6 +55,15 @@ Run Air3D:
 CUDA_VISIBLE_DEVICES=2 python run_experiment.py --mode train --experiment_name air3D --wandb_group training --wandb_name air3D --dynamics_class Air3D --minWith target --tMax 1.1 --velocity 0.75 --omega_max 3.0 --angle_alpha 1.2 --num_src_samples 10000 --pretrain --pretrain_iters 10000 --num_epochs 120000 --counter_end 110000 --collisionR 0.25
 ```
 
+Run ReachAvoidRocketLanding:
+```
+CUDA_VISIBLE_DEVICES=1 python run_experiment.py --mode train --experiment_name ReachAvoidRocketLanding --wandb_group training --wandb_name ReachAvoidRocketLanding --dynamics_class ReachAvoidRocketLanding --minWith target --tMax 1.1 --num_src_samples 10000 --pretrain --pretrain_iters 10000 --num_epochs 120000 --counter_end 110000
+```
+
+Run PickUpObjectLearnedSwitchingModel:
+```
+CUDA_VISIBLE_DEVICES=2 python run_experiment.py --mode train --wandb_group PickUpObjectLearnedSwitchingModel --wandb_name reach_gripper --dynamics_class PickUpObjectLearnedSwitchingModel --minWith target --tMax 1.1 --num_src_samples 10000 --pretrain --pretrain_iters 10000 --num_epochs 120000 --counter_end 110000
+```
 
 This will regularly save checkpoints in the directory specified by the rootpath in the script, in a subdirectory "experiment_1". 
 
